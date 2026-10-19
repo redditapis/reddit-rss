@@ -123,6 +123,8 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
     const p = fetchOnce(key).then((r) => {
       if (r.error) {
         failures.set(key, { ...r, at: now() });
+        // Bounded: drop the oldest remembered failure once there are too many to be useful.
+        if (failures.size > 1000) failures.delete(failures.keys().next().value);
         // A failed refresh keeps serving the last good copy rather than breaking every reader.
         return hit || r;
       }

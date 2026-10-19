@@ -23,7 +23,7 @@ REDDITAPIS_API_KEY=your_key npm start
 
 3. In your reader, replace `https://www.reddit.com` (or `https://old.reddit.com`) with `http://localhost:8080` in any feed URL.
 
-The quick start listens on this machine only. To serve readers elsewhere, publish the port and set `FEED_TOKEN` (see [Configuration](#configuration)).
+Both quick starts listen on this machine only (the Docker one publishes the port on 127.0.0.1). To serve readers elsewhere, publish the port and set `FEED_TOKEN` (see [Configuration](#configuration)).
 
 ## Feeds
 
@@ -46,6 +46,8 @@ Swap `.rss` for `.atom` or `.json` to get Atom or JSON Feed. `?limit=` sets the 
 |---|---|---|
 | `REDDITAPIS_API_KEY` | (required) | Your API key. |
 | `PORT` | `8080` | Port to listen on. |
+| `HOST` | `127.0.0.1` (`0.0.0.0` in the Docker image) | Address to listen on. Anything other than loopback makes the instance reachable by others: set `FEED_TOKEN` too. |
+| `HOST_PORT` | `8080` | Docker Compose only: the port on this machine the container is published on. |
 | `CACHE_TTL_SECONDS` | `300` | How long a feed is reused before it is fetched again. |
 | `MAX_API_CALLS_PER_MINUTE` | `60` | Hard cap on API calls this instance makes, whatever readers request. Past it, readers get the last good copy or a 429. |
 | `CACHE_MAX_MB` | `64` | Memory the feed cache may use. |
