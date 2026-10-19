@@ -1,0 +1,35 @@
+{
+  "name": "reddit-rss",
+  "version": "1.0.0",
+  "description": "Reddit RSS, Atom and JSON feeds for subreddits, searches, users and comment threads, self-hosted in one Docker command.",
+  "type": "module",
+  "main": "src/server.js",
+  "bin": {
+    "reddit-rss": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "rss",
+    "reddit",
+    "reddit-rss",
+    "rss-feed",
+    "atom",
+    "json-feed",
+    "self-hosted",
+    "feed-reader",
+    "miniflux",
+    "freshrss"
+  ],
+  "homepage": "https://github.com/redditapis/reddit-rss#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redditapis/reddit-rss.git"
+  },
+  "license": "MIT"
+}
