@@ -10,7 +10,8 @@ function absolute(permalink) {
 function isoOf(x) {
   if (typeof x.created === "string" && !Number.isNaN(Date.parse(x.created))) return new Date(x.created).toISOString();
   if (Number.isFinite(x.created_utc)) return new Date(x.created_utc * 1000).toISOString();
-  return new Date(0).toISOString();
+  if (Number.isFinite(x.created)) return new Date(x.created * 1000).toISOString();
+  return null;
 }
 
 function clip(text, n) {
@@ -19,32 +20,44 @@ function clip(text, n) {
 }
 
 /** One feed item per post or comment: { id, title, link, author, date, text, externalUrl }. */
-export function itemsOf(kind, body) {
+export function itemsOf(kind, body, fetchedAt = new Date().toISOString()) {
   if (kind === "posts") {
     return (Array.isArray(body && body.posts) ? body.posts : []).map((p) => ({
       id: p.name || `t3_${p.id}`,
       title: p.title || "(untitled)",
       link: absolute(p.permalink),
       author: p.author || "[deleted]",
-      date: isoOf(p),
+      date: isoOf(p) || fetchedAt,
       text: p.text || "",
       externalUrl: p.link_url || null,
       meta: `r/${p.subreddit} · ${Number(p.upvotes) || 0} points · ${Number(p.comments) || 0} comments`,
     }));
   }
-  // A thread response carries its comments the same way, beside the post they reply to.
-  const comments = Array.isArray(body && body.comments) ? body.comments : [];
-  return comments
+  // A thread carries Reddit's own nodes, {kind: "t1", data: {...}} with replies nested under
+  // data.replies, plus "more" placeholders; flatten them. The other comment feeds are flat already.
+  const flat = [];
+  const walk = (nodes) => {
+    for (const n of Array.isArray(nodes) ? nodes : []) {
+      if (!n || n.kind === "more") continue;
+      const c = n.kind === "t1" && n.data ? n.data : n;
+      flat.push(c);
+      const kids = c.replies && c.replies.data && c.replies.data.children;
+      if (kids) walk(kids);
+    }
+  };
+  walk(body && body.comments);
+  const post = body && body.post ? (body.post.data || body.post) : {};
+  return flat
     .filter((c) => c && (c.body || c.text))
     .map((c) => ({
       id: c.name || `t1_${c.id}`,
-      title: `${c.author || "[deleted]"} on ${clip(c.link_title || (body && body.post && body.post.title) || `r/${c.subreddit || ""}`, 80)}`,
+      title: `${c.author || "[deleted]"} on ${clip(c.link_title || post.title || `r/${c.subreddit || ""}`, 80)}`,
       link: absolute(c.permalink),
       author: c.author || "[deleted]",
-      date: isoOf(c),
+      date: isoOf(c) || fetchedAt,
       text: c.body || c.text || "",
       externalUrl: null,
-      meta: `r/${c.subreddit || (body && body.post && body.post.subreddit) || ""} · ${Number(c.upvotes ?? c.score) || 0} points`,
+      meta: `r/${c.subreddit || post.subreddit || ""} · ${Number(c.upvotes ?? c.score) || 0} points`,
     }));
 }
 
@@ -92,7 +105,7 @@ export function render(format, { title, link, self, items, promo }) {
           title: it.title,
           content_html: htmlBody(it),
           date_published: it.date,
-          authors: [{ name: `u/${it.author}`, url: `${SITE}/user/${encodeURIComponent(it.author)}` }],
+          authors: [it.author === "[deleted]" ? { name: "[deleted]" } : { name: `u/${it.author}`, url: `${SITE}/user/${encodeURIComponent(it.author)}` }],
         })),
       }, null, 2),
     };

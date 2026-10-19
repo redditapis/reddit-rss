@@ -18,7 +18,10 @@ const SUB_SORTS = new Set(["hot", "new", "top", "rising", "controversial", "best
 const USER_SORTS = new Set(["new", "hot", "top", "controversial"]);
 const SEARCH_SORTS = new Set(["relevance", "hot", "top", "new", "comments"]);
 const TIMES = new Set(["hour", "day", "week", "month", "year", "all"]);
-const NAME = /^[A-Za-z0-9_-]{1,64}$/;
+// The API's own rules, so a name it would refuse is a 404 here rather than a 502.
+const SUB = /^[A-Za-z0-9_]{1,21}$/;
+const USER = /^[A-Za-z0-9_-]{3,20}$/;
+const SLUG = /^[A-Za-z0-9_-]{1,120}$/;
 const POST_ID = /^[a-z0-9]{1,16}$/i;
 
 export function formatOf(pathname) {
@@ -66,7 +69,7 @@ export function routeFor(pathname, query) {
     };
   }
 
-  if (p[0] === "r" && NAME.test(p[1] || "")) {
+  if (p[0] === "r" && SUB.test(p[1] || "")) {
     const sub = p[1];
     const rest = p.slice(2);
     if (rest.length === 0) {
@@ -80,8 +83,9 @@ export function routeFor(pathname, query) {
       return { path: `/api/reddit/sub/${sub}/comments`, params: common({}, query), kind: "comments", title: `r/${sub}: newest comments`, link: `https://www.reddit.com/r/${sub}/comments/` };
     }
     if (rest[0] === "comments" && POST_ID.test(rest[1] || "")) {
-      const permalink = `/r/${sub}/comments/${rest[1]}/${rest[2] && NAME.test(rest[2]) ? `${rest[2]}/` : ""}`;
-      const params = { permalink, depth: 1, sort: "new" };
+      const permalink = `/r/${sub}/comments/${rest[1]}/${rest[2] && SLUG.test(rest[2]) ? `${rest[2]}/` : ""}`;
+      // Three levels of replies, newest first: a thread feed should show the conversation, not only its first layer.
+      const params = { permalink, depth: 3, sort: "new" };
       const limit = Number(query.get("limit"));
       params.limit = Number.isInteger(limit) && limit >= 1 && limit <= 500 ? limit : 50;
       return { path: "/api/reddit/comments", params, kind: "thread", title: `r/${sub}: comments on ${rest[1]}`, link: `https://www.reddit.com${permalink}` };
@@ -100,12 +104,14 @@ export function routeFor(pathname, query) {
     return null;
   }
 
-  if ((p[0] === "user" || p[0] === "u") && NAME.test(p[1] || "")) {
+  if ((p[0] === "user" || p[0] === "u") && USER.test(p[1] || "")) {
     const name = p[1];
     const what = p[2] || "submitted";
     const sort = pick(USER_SORTS, query.get("sort")) || "new";
     if (p.length <= 3 && (what === "submitted" || what === "overview")) {
-      return { path: `/api/reddit/user/${name}/submitted`, params: common({ sort, t: sort === "top" || sort === "controversial" ? t : undefined }, query), kind: "posts", title: `u/${name}: posts`, link: `https://www.reddit.com/user/${name}/submitted/` };
+      // The user endpoints take day/week/month/year/all, not hour.
+      const ut = t === "hour" ? undefined : t;
+      return { path: `/api/reddit/user/${name}/submitted`, params: common({ sort, t: sort === "top" || sort === "controversial" ? ut : undefined }, query), kind: "posts", title: `u/${name}: posts`, link: `https://www.reddit.com/user/${name}/submitted/` };
     }
     if (p.length === 3 && what === "comments") {
       return { path: `/api/reddit/user/${name}/comments`, params: common({ sort }, query), kind: "comments", title: `u/${name}: comments`, link: `https://www.reddit.com/user/${name}/comments/` };

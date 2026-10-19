@@ -110,3 +110,82 @@ test("unknown paths and methods", async () => {
     await s.close();
   }
 });
+
+test("thread feeds unwrap Reddit's comment nodes, include replies and skip 'more'", async () => {
+  const thread = {
+    post: { title: "A post", subreddit: "rss" },
+    comments: [
+      { kind: "t1", data: { id: "c1", name: "t1_c1", author: "ann", body: "top level", permalink: "/r/rss/comments/a1/x/c1/", created_utc: 1792353314, score: 3,
+        replies: { kind: "Listing", data: { children: [{ kind: "t1", data: { id: "c2", name: "t1_c2", author: "bob", body: "a reply", permalink: "/r/rss/comments/a1/x/c2/", created_utc: 1792353400, score: 1, replies: "" } }] } } } },
+      { kind: "more", data: { count: 12, children: ["c9"] } },
+    ],
+  };
+  const s = await serve({}, { fetchImpl: fakeFetch([], { body: thread }) });
+  try {
+    const j = await (await fetch(`${s.base}/r/rss/comments/a1/x/.json`)).json();
+    assert.deepEqual(j.items.map((i) => i.id), ["t1_c1", "t1_c2"]);
+    assert.equal(j.items[1].title, "bob on A post");
+    assert.ok(j.items[0].date_published.startsWith("2026-10-18"));
+  } finally {
+    await s.close();
+  }
+});
+
+test("concurrent readers of one feed share a single API call", async () => {
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const fetchImpl = async (url, init) => { calls.push(url); await gate; return { ok: true, status: 200, text: async () => JSON.stringify(POSTS) }; };
+  const s = await serve({}, { fetchImpl });
+  try {
+    const all = Promise.all(Array.from({ length: 20 }, () => fetch(`${s.base}/r/rss/.rss`)));
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    const rs = await all;
+    assert.ok(rs.every((r) => r.status === 200));
+    assert.equal(calls.length, 1);
+  } finally {
+    await s.close();
+  }
+});
+
+test("the per-minute call budget caps spend on an open instance", async () => {
+  const calls = [];
+  const s = await serve({ callsPerMinute: 3 }, { fetchImpl: fakeFetch(calls) });
+  try {
+    const statuses = [];
+    for (let i = 0; i < 6; i++) statuses.push((await fetch(`${s.base}/search.rss?q=term${i}`)).status);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(statuses, [200, 200, 200, 429, 429, 429]);
+  } finally {
+    await s.close();
+  }
+});
+
+test("the token never appears in a feed body, and a hostile Host header is not trusted", async () => {
+  const s = await serve({ feedToken: "s3cret" }, { fetchImpl: fakeFetch([]) });
+  try {
+    const body = await (await fetch(`${s.base}/r/rss/.atom?token=s3cret&limit=5`)).text();
+    assert.ok(!body.includes("s3cret"));
+    assert.ok(body.includes("/r/rss/.atom?limit=5"));
+  } finally {
+    await s.close();
+  }
+  const http = await import("node:http");
+  const s2 = await serve({}, { fetchImpl: fakeFetch([]) });
+  try {
+    const port = new URL(s2.base).port;
+    const body = await new Promise((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path: "/r/rss/.atom", headers: { Host: 'evil.example"><x' } }, (r) => { let b = ""; r.on("data", (c) => (b += c)); r.on("end", () => resolve(b)); }).on("error", reject);
+    });
+    assert.ok(!body.includes("evil.example"));
+    assert.ok(body.includes("<id>http://localhost/r/rss/.atom</id>"));
+  } finally {
+    await s2.close();
+  }
+});
+
+test("an empty CACHE_TTL_SECONDS means the default, not zero", () => {
+  assert.equal(configFromEnv({ REDDITAPIS_API_KEY: "k", CACHE_TTL_SECONDS: "" }).cacheTtlSeconds, 300);
+  assert.equal(configFromEnv({ REDDITAPIS_API_KEY: "k", CACHE_TTL_SECONDS: "0" }).cacheTtlSeconds, 0);
+});
