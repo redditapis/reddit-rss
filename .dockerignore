@@ -2,4 +2,8 @@
 node_modules
 test
 .env
+.env.*
+*.pem
+*.key
+.npmrc
 *.md

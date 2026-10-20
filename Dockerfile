@@ -1,4 +1,6 @@
 FROM node:22-alpine
+LABEL org.opencontainers.image.source="https://github.com/redditapis/reddit-rss" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 # The server must listen on every interface inside the container for a published port to reach it.
 # The container cannot see how that port is published, so the start-up check for FEED_TOKEN is off
