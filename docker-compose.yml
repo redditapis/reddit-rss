@@ -6,6 +6,7 @@ services:
     env_file: .env
     environment:
       # Inside the container the server must listen on every interface so the published port reaches it;
-      # this wins over any HOST in .env. The port is still published on 127.0.0.1 only (above).
+      # this wins over any HOST in .env. The port is still published on 127.0.0.1 only (above), which is
+      # what keeps the instance private. Publish it anywhere else and set FEED_TOKEN in .env.
       HOST: 0.0.0.0
     restart: unless-stopped
