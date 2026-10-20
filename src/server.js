@@ -10,6 +10,7 @@ export const SIGNUP_URL = "https://www.redditapis.com/?ref=gh-reddit-rss";
 export const MAX_BODY_BYTES = 4 * 1024 * 1024;
 // A failed refresh is remembered this long, so a broken feed is not re-fetched on every poll.
 export const FAILURE_TTL_MS = 60_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function intEnv(value, fallback, min = 0) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
@@ -17,26 +18,57 @@ function intEnv(value, fallback, min = 0) {
   return Number.isInteger(n) && n >= min ? n : fallback;
 }
 
-/** Settings from the environment. Throws when the API key is missing. */
+/** True for an address only this machine can reach. */
+export function isLoopback(host) {
+  const h = String(host || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || /^(::ffff:)?127(\.\d{1,3}){3}$/.test(h);
+}
+
+/** Settings from the environment. Throws when the API key is missing or the instance would be open to anyone. */
 export function configFromEnv(env = process.env) {
   const apiKey = (env.REDDITAPIS_API_KEY || "").trim();
   if (!apiKey) throw new Error(`REDDITAPIS_API_KEY is not set. Get a key at ${SIGNUP_URL}`);
+  const host = (env.HOST || "").trim() || "127.0.0.1";
+  const feedToken = (env.FEED_TOKEN || "").trim() || null;
+  const allowPublic = (env.ALLOW_PUBLIC || "").trim() === "1";
+  if (!isLoopback(host) && !feedToken && !allowPublic) {
+    throw new Error(
+      `HOST is ${host}, so other machines can reach this instance, and FEED_TOKEN is not set: anyone who finds it would spend your API balance. ` +
+      "Set FEED_TOKEN, or set ALLOW_PUBLIC=1 if something else keeps it private (a port published on 127.0.0.1 only, a firewall, or a proxy that asks for a login).",
+    );
+  }
   return {
     apiKey,
     apiBase: (env.REDDITAPIS_API_BASE || "https://api.redditapis.com").replace(/\/+$/, ""),
+    host,
+    port: intEnv(env.PORT, 8080, 0),
     cacheTtlSeconds: intEnv(env.CACHE_TTL_SECONDS, 300),
     callsPerMinute: intEnv(env.MAX_API_CALLS_PER_MINUTE, 60, 1),
+    callsPerDay: intEnv(env.MAX_API_CALLS_PER_DAY, 2000, 1),
     cacheBytes: intEnv(env.CACHE_MAX_MB, 64, 1) * 1024 * 1024,
-    feedToken: (env.FEED_TOKEN || "").trim() || null,
+    feedToken,
     publicUrl: (env.PUBLIC_URL || "").replace(/\/+$/, "") || null,
   };
 }
 
-function tokenOk(expected, given) {
+const sha256 = (s) => createHash("sha256").update(String(s)).digest();
+
+/** Compares digests, so neither the token nor its length can be learned from response times. */
+export function tokenOk(expected, given) {
   if (!expected) return true;
-  const a = Buffer.from(String(given || ""));
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+  return timingSafeEqual(sha256(given || ""), sha256(expected));
+}
+
+/**
+ * If-None-Match per RFC 9110 13.1.2: `*`, or a comma-separated list of entity tags, compared weakly
+ * (a W/ prefix is ignored on either side).
+ */
+export function noneMatch(header, etag) {
+  if (!header) return false;
+  const h = String(header).trim();
+  if (h === "*") return true;
+  const bare = (t) => t.replace(/^W\//, "");
+  return (h.match(/(?:W\/)?"[^"]*"/g) || []).some((t) => bare(t) === bare(etag));
 }
 
 function send(res, status, headers, body = "") {
@@ -44,25 +76,48 @@ function send(res, status, headers, body = "") {
   res.end(body);
 }
 
-function messageOf(json, status) {
-  const e = json && (json.error ?? json.message);
-  if (typeof e === "string" && e) return e.slice(0, 200);
-  if (e && typeof e === "object" && typeof e.message === "string") return e.message.slice(0, 200);
-  return `upstream answered ${status}`;
+// What a reader sees for each kind of failure. Fixed text only: the API's own error text can name
+// things a reader should not see, so it goes to the server log instead.
+const FAILURES = {
+  not_found: { status: 404, text: "Feed unavailable: Reddit has no such subreddit, user or post." },
+  balance: { status: 502, text: `Feed unavailable: the API balance is empty: top up at ${SIGNUP_URL}` },
+  auth: { status: 502, text: "Feed unavailable: the API key was refused. Check REDDITAPIS_API_KEY." },
+  rate_limited: { status: 429, text: "Feed unavailable: the API is rate limiting this instance. Try again in a minute." },
+  minute_budget: { status: 429, text: "Feed unavailable: this instance reached its API call budget for the minute." },
+  day_budget: { status: 429, text: "Feed unavailable: this instance reached its API call budget for the day." },
+  too_large: { status: 502, text: "Feed unavailable: the API response was too large." },
+  timeout: { status: 502, text: "Feed unavailable: the API did not answer in time." },
+  unreachable: { status: 502, text: "Feed unavailable: the API could not be reached." },
+  upstream: { status: 502, text: "Feed unavailable: the API returned an error." },
+};
+
+function reasonOf(status) {
+  if (status === 404) return "not_found";
+  if (status === 402) return "balance";
+  if (status === 401 || status === 403) return "auth";
+  if (status === 429) return "rate_limited";
+  return "upstream";
 }
 
 /**
  * @param {ReturnType<typeof configFromEnv>} cfg
- * @param {{ fetchImpl?: typeof fetch, now?: () => number }} [deps]
+ * @param {{ fetchImpl?: typeof fetch, now?: () => number, log?: (line: string) => void }} [deps]
  */
-export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now } = {}) {
-  const cfgFull = { callsPerMinute: 60, cacheBytes: 64 * 1024 * 1024, ...cfg };
-  const cache = new Map(); // upstream url -> { at, json, bytes }  (insertion order = least recently refreshed first)
-  const failures = new Map(); // upstream url -> { at, status, message }
+export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now, log = (line) => console.error(line) } = {}) {
+  const cfgFull = { callsPerMinute: 60, callsPerDay: 2000, cacheBytes: 64 * 1024 * 1024, ...cfg };
+  // upstream url -> { at, text, bytes }. The raw response text is what is kept, so the cache budget
+  // counts the bytes actually held; it is parsed again when a feed is rendered.
+  // Insertion order = least recently refreshed first.
+  const cache = new Map();
+  const failures = new Map(); // upstream url -> { at, status, reason }
   const inflight = new Map(); // upstream url -> Promise, so concurrent readers share one call
   let cacheBytes = 0;
   let windowStart = 0;
   let callsThisWindow = 0;
+  // The times of the last callsPerDay calls, as a ring: a new call is allowed only when the oldest
+  // of them is more than 24 hours old, so no 24-hour span ever holds more than callsPerDay calls.
+  const dayCalls = new Float64Array(cfgFull.callsPerDay).fill(-Infinity);
+  let dayNext = 0;
 
   function remember(key, entry) {
     const old = cache.get(key);
@@ -76,14 +131,22 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
     }
   }
 
-  // Every API call costs the instance owner, so they are budgeted per minute whatever the
-  // readers ask for: past the budget a request gets the last good copy or a 429, never a new call.
+  // Every API call costs the instance owner, so they are budgeted per minute and per 24 hours whatever
+  // the readers ask for: past either budget a request gets the last good copy or a 429, never a new call.
   function takeBudget() {
     const t = now();
     if (t - windowStart >= 60_000) { windowStart = t; callsThisWindow = 0; }
-    if (callsThisWindow >= cfgFull.callsPerMinute) return false;
+    if (callsThisWindow >= cfgFull.callsPerMinute) return "minute_budget";
+    if (t - dayCalls[dayNext] < DAY_MS) return "day_budget";
     callsThisWindow += 1;
-    return true;
+    dayCalls[dayNext] = t;
+    dayNext = (dayNext + 1) % dayCalls.length;
+    return null;
+  }
+
+  function fail(key, status, reason, detail) {
+    log(`reddit-rss: ${key} failed (${status}): ${String(detail).replace(/\s+/g, " ").slice(0, 500)}`);
+    return { error: true, status, reason };
   }
 
   async function fetchOnce(key) {
@@ -95,16 +158,16 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
         signal: ctrl.signal,
       });
       const text = await r.text();
-      if (text.length > MAX_BODY_BYTES) return { error: true, status: 502, message: "upstream response too large" };
-      let json = null;
-      try { json = JSON.parse(text); } catch { /* reported below */ }
-      if (!r.ok || !json) return { error: true, status: r.status, message: messageOf(json, r.status) };
-      const entry = { at: now(), json, bytes: text.length };
+      const bytes = Buffer.byteLength(text);
+      if (bytes > MAX_BODY_BYTES) return fail(key, 502, "too_large", `response of ${bytes} bytes`);
+      if (!r.ok) return fail(key, r.status, reasonOf(r.status), text);
+      try { JSON.parse(text); } catch { return fail(key, 502, "upstream", `not JSON: ${text}`); }
+      const entry = { at: now(), text, bytes };
       remember(key, entry);
       failures.delete(key);
       return entry;
     } catch (e) {
-      return { error: true, status: 504, message: e.name === "AbortError" ? "upstream timed out" : "upstream unreachable" };
+      return e.name === "AbortError" ? fail(key, 504, "timeout", "no answer in 30s") : fail(key, 504, "unreachable", e.message);
     } finally {
       clearTimeout(timer);
     }
@@ -119,7 +182,8 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
     const failed = failures.get(key);
     if (failed && now() - failed.at < FAILURE_TTL_MS) return hit || failed;
     if (inflight.has(key)) return inflight.get(key);
-    if (!takeBudget()) return hit || { error: true, status: 429, message: "this instance reached its API call budget for the minute" };
+    const over = takeBudget();
+    if (over) return hit || { error: true, status: 429, reason: over };
     const p = fetchOnce(key).then((r) => {
       if (r.error) {
         failures.set(key, { ...r, at: now() });
@@ -157,9 +221,8 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
       const up = await upstream(route);
       if (up.error) {
         // A missing subreddit or user is the reader's 404; a spent budget is a 429; anything else is ours (502).
-        const status = up.status === 404 ? 404 : up.status === 429 ? 429 : 502;
-        const hint = up.status === 402 ? ` Your API balance is empty: top up at ${SIGNUP_URL}` : up.status === 401 || up.status === 403 ? " Check REDDITAPIS_API_KEY." : "";
-        return send(res, status, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": status === 429 ? "60" : "300" }, `Feed unavailable: ${up.message}.${hint}\n`);
+        const f = FAILURES[up.reason] || FAILURES.upstream;
+        return send(res, f.status, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": f.status === 429 ? "60" : "300" }, `${f.text}\n`);
       }
 
       const format = formatOf(url.pathname);
@@ -169,10 +232,13 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
       const qs = shown.toString();
       const self = `${baseUrl(req)}${url.pathname}${qs ? `?${qs}` : ""}`;
       const fetchedAt = new Date(up.at).toISOString();
-      const { body, type } = render(format, { title: route.title, link: route.link, self, items: itemsOf(route.kind, up.json, fetchedAt), promo: SIGNUP_URL });
+      const items = itemsOf(route.kind, JSON.parse(up.text), fetchedAt);
+      const { body, type } = render(format, { title: route.title, link: route.link, self, items, promo: SIGNUP_URL, fetchedAt });
       const etag = `"${createHash("sha1").update(body).digest("base64url")}"`;
-      const headers = { "Content-Type": type, ETag: etag, "Last-Modified": new Date(up.at).toUTCString(), "Cache-Control": `public, max-age=${cfgFull.cacheTtlSeconds}` };
-      if (req.headers["if-none-match"] === etag) return send(res, 304, headers);
+      // A token-protected feed is one reader's copy: shared caches must not keep it.
+      const cacheControl = `${cfgFull.feedToken ? "private" : "public"}, max-age=${cfgFull.cacheTtlSeconds}`;
+      const headers = { "Content-Type": type, ETag: etag, "Last-Modified": new Date(up.at).toUTCString(), "Cache-Control": cacheControl };
+      if (noneMatch(req.headers["if-none-match"], etag)) return send(res, 304, headers);
       return send(res, 200, headers, req.method === "HEAD" ? "" : body);
     } catch {
       return send(res, 500, { "Content-Type": "text/plain; charset=utf-8" }, "Internal error\n");

@@ -1,6 +1,10 @@
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production PORT=8080 HOST=0.0.0.0
+# The server must listen on every interface inside the container for a published port to reach it.
+# The container cannot see how that port is published, so the start-up check for FEED_TOKEN is off
+# here (ALLOW_PUBLIC=1): publishing on 127.0.0.1 is what keeps it private, and FEED_TOKEN is needed
+# as soon as you publish it anywhere else.
+ENV NODE_ENV=production PORT=8080 HOST=0.0.0.0 ALLOW_PUBLIC=1
 COPY package.json ./
 COPY src ./src
 USER node

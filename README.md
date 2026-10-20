@@ -23,7 +23,7 @@ REDDITAPIS_API_KEY=your_key npm start
 
 3. In your reader, replace `https://www.reddit.com` (or `https://old.reddit.com`) with `http://localhost:8080` in any feed URL.
 
-Both quick starts listen on this machine only (the Docker one publishes the port on 127.0.0.1). To serve readers elsewhere, publish the port and set `FEED_TOKEN` (see [Configuration](#configuration)).
+Both quick starts listen on this machine only. Inside the container the server listens on `0.0.0.0`, so the image sets `ALLOW_PUBLIC=1`; publishing the port on `127.0.0.1` (as above, and in Docker Compose) is what keeps it private. To serve readers elsewhere, publish the port more widely and set `FEED_TOKEN` (see [Configuration](#configuration)). Outside Docker, the server refuses to start on an address other machines can reach unless `FEED_TOKEN` is set.
 
 ## Feeds
 
@@ -46,12 +46,14 @@ Swap `.rss` for `.atom` or `.json` to get Atom or JSON Feed. `?limit=` sets the 
 |---|---|---|
 | `REDDITAPIS_API_KEY` | (required) | Your API key. |
 | `PORT` | `8080` | Port to listen on. |
-| `HOST` | `127.0.0.1` (`0.0.0.0` in the Docker image) | Address to listen on. Anything other than loopback makes the instance reachable by others: set `FEED_TOKEN` too. |
+| `HOST` | `127.0.0.1` (`0.0.0.0` in the Docker image) | Address to listen on. Anything other than loopback makes the instance reachable by others, so the server will not start without `FEED_TOKEN` (or `ALLOW_PUBLIC=1`). |
+| `ALLOW_PUBLIC` | (none) (`1` in the Docker image) | Set to `1` to start on a non-loopback `HOST` with no `FEED_TOKEN`. Use it only when something else keeps the instance private: a port published on 127.0.0.1, a firewall, or a proxy that asks for a login. |
 | `HOST_PORT` | `8080` | Docker Compose only: the port on this machine the container is published on. |
 | `CACHE_TTL_SECONDS` | `300` | How long a feed is reused before it is fetched again. |
-| `MAX_API_CALLS_PER_MINUTE` | `60` | Hard cap on API calls this instance makes, whatever readers request. Past it, readers get the last good copy or a 429. |
-| `CACHE_MAX_MB` | `64` | Memory the feed cache may use. |
-| `FEED_TOKEN` | (none) | When set, every feed URL needs `?token=<value>`, so a public instance cannot spend your balance. |
+| `MAX_API_CALLS_PER_MINUTE` | `60` | Hard cap on API calls this instance makes in a minute, whatever readers request. Past it, readers get the last good copy or a 429. |
+| `MAX_API_CALLS_PER_DAY` | `2000` | Hard cap on API calls in any 24 hours. Past it, readers get the last good copy or a 429 until the oldest of those calls is a day old. |
+| `CACHE_MAX_MB` | `64` | Memory the feed cache may use, counted in bytes of the API responses it keeps. |
+| `FEED_TOKEN` | (none) | When set, every feed URL needs `?token=<value>`, so a public instance cannot spend your balance. Feeds are then sent as `Cache-Control: private`, so shared caches do not keep them. |
 | `PUBLIC_URL` | request host | The address readers use, for the feed's self link (e.g. `https://rss.example.com`). Set it on any public instance. |
 | `REDDITAPIS_API_BASE` | `https://api.redditapis.com` | Only needed for testing against another endpoint. |
 
@@ -60,13 +62,17 @@ Copy `.env.example` to `.env` and `docker compose up -d` does the same as the on
 ## How it handles failures
 
 - A subreddit or user that does not exist is a 404, so your reader shows it as a broken feed rather than an empty one.
-- If a refresh fails, the last good copy is served until the next refresh works.
+- If a refresh fails, the last good copy is served until the next refresh works. A failing feed is retried once a minute, however often readers poll it.
 - An empty balance returns a 502 with a link to top up, and readers retry on their own.
+- Readers get a short, fixed message for each kind of failure. The API's own error text goes to the server log only.
+- Past the per-minute or per-day call budget, readers get the last good copy or a 429.
 - Readers polling the same feed at the same moment share one API call.
 
 ## FAQ
 
-**Why do I need an API key?** Reddit's feeds are going away; the key is what keeps your feeds working after November 13. You pay only for the refreshes your reader makes; with the default five-minute cache, a busy feed costs at most one API call per five minutes no matter how many readers follow it.
+**Why do I need an API key?** Reddit's feeds are going away; the key is what keeps your feeds working after November 13. You pay only for the refreshes your reader makes; with the default five-minute cache, a busy feed costs at most one API call per five minutes no matter how many readers follow it. A feed whose refresh fails is retried once a minute. The whole instance makes at most `MAX_API_CALLS_PER_DAY` calls (2000 by default) in any 24 hours.
+
+**Why does it refuse to start?** `HOST` is an address other machines can reach and `FEED_TOKEN` is not set, so anyone who found the instance could spend your balance. Set `FEED_TOKEN`, or set `ALLOW_PUBLIC=1` if a firewall or a proxy already keeps it private.
 
 **Can I share one instance with friends?** Yes. Set `FEED_TOKEN` and give them URLs with `?token=`.
 

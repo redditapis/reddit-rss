@@ -7,6 +7,11 @@ function absolute(permalink) {
   return /^https?:\/\//.test(permalink) ? permalink : `${SITE}${permalink.startsWith("/") ? "" : "/"}${permalink}`;
 }
 
+// Only plain web links go into a feed: a javascript: or data: URL in a post would run in some readers.
+function httpUrl(u) {
+  return typeof u === "string" && /^https?:\/\//i.test(u) ? u : null;
+}
+
 function isoOf(x) {
   if (typeof x.created === "string" && !Number.isNaN(Date.parse(x.created))) return new Date(x.created).toISOString();
   if (Number.isFinite(x.created_utc)) return new Date(x.created_utc * 1000).toISOString();
@@ -29,7 +34,7 @@ export function itemsOf(kind, body, fetchedAt = new Date().toISOString()) {
       author: p.author || "[deleted]",
       date: isoOf(p) || fetchedAt,
       text: p.text || "",
-      externalUrl: p.link_url || null,
+      externalUrl: httpUrl(p.link_url),
       meta: `r/${p.subreddit} · ${Number(p.upvotes) || 0} points · ${Number(p.comments) || 0} comments`,
     }));
   }
@@ -76,17 +81,20 @@ function htmlBody(it) {
     .filter(Boolean)
     .map((p) => `<p>${xml(p).replace(/\n/g, "<br/>")}</p>`)
     .join("");
-  const link = it.externalUrl ? `<p><a href="${xml(it.externalUrl)}">${xml(it.externalUrl)}</a></p>` : "";
-  return `${paras}${link}<p>${xml(it.meta)} · <a href="${xml(it.link)}">open on Reddit</a></p>`;
+  const external = httpUrl(it.externalUrl);
+  const link = external ? `<p><a href="${xml(external)}">${xml(external)}</a></p>` : "";
+  const onReddit = httpUrl(it.link) ? ` · <a href="${xml(it.link)}">open on Reddit</a>` : "";
+  return `${paras}${link}<p>${xml(it.meta)}${onReddit}</p>`;
 }
 
 /**
  * @param {"rss"|"atom"|"json"} format
- * @param {{ title: string, link: string, self: string, items: object[], promo: string }} feed
+ * @param {{ title: string, link: string, self: string, items: object[], promo: string, fetchedAt?: string }} feed
  * @returns {{ body: string, type: string }}
  */
-export function render(format, { title, link, self, items, promo }) {
-  const updated = items.length ? items.map((i) => i.date).sort().slice(-1)[0] : new Date().toISOString();
+export function render(format, { title, link, self, items, promo, fetchedAt }) {
+  // An empty feed is dated by when it was fetched, so the same copy renders the same bytes (and ETag).
+  const updated = items.length ? items.map((i) => i.date).sort().slice(-1)[0] : (fetchedAt || new Date().toISOString());
   const description = `${title}. Feed served by reddit-rss (${promo}).`;
 
   if (format === "json") {
@@ -101,7 +109,7 @@ export function render(format, { title, link, self, items, promo }) {
         items: items.map((it) => ({
           id: it.id,
           url: it.link,
-          external_url: it.externalUrl || undefined,
+          external_url: httpUrl(it.externalUrl) || undefined,
           title: it.title,
           content_html: htmlBody(it),
           date_published: it.date,
@@ -112,8 +120,11 @@ export function render(format, { title, link, self, items, promo }) {
   }
 
   if (format === "atom") {
+    // An entry id comes from the Reddit id (t3_ for posts, t1_ for comments), never the link, so two
+    // entries cannot share one and an entry keeps its id if its link changes.
+    const atomId = (id) => `tag:reddit.com,2005:${id}`;
     const entries = items.map((it) => `  <entry>
-    <id>${xml(it.link)}</id>
+    <id>${xml(atomId(it.id))}</id>
     <title>${xml(it.title)}</title>
     <link href="${xml(it.link)}"/>
     <author><name>u/${xml(it.author)}</name></author>

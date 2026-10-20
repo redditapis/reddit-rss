@@ -3,15 +3,14 @@ import { configFromEnv, createServer } from "./server.js";
 
 let cfg;
 try {
+  // Refuses a missing key, and an instance others can reach with no FEED_TOKEN (unless ALLOW_PUBLIC=1).
   cfg = configFromEnv();
 } catch (e) {
   console.error(e.message);
   process.exit(1);
 }
-const port = Number(process.env.PORT) || 8080;
-// This machine only unless HOST says otherwise: an instance reachable by others spends your balance.
-const host = process.env.HOST || "127.0.0.1";
-createServer(cfg).listen(port, host, () => {
-  console.log(`reddit-rss listening on ${host}:${port} (cache ${cfg.cacheTtlSeconds}s${cfg.feedToken ? ", token required" : ""})`);
-  if (host !== "127.0.0.1" && host !== "localhost" && !cfg.feedToken) console.log("warning: reachable beyond this machine with no FEED_TOKEN; anyone who can reach it spends your API balance");
+const server = createServer(cfg);
+server.listen(cfg.port, cfg.host, () => {
+  const { port } = server.address();
+  console.log(`reddit-rss listening on ${cfg.host}:${port} (cache ${cfg.cacheTtlSeconds}s, at most ${cfg.callsPerMinute} API calls a minute and ${cfg.callsPerDay} a day${cfg.feedToken ? ", token required" : ""})`);
 });
