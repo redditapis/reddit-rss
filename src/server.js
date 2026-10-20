@@ -12,6 +12,8 @@ export const MAX_BODY_BYTES = 4 * 1024 * 1024;
 export const FAILURE_TTL_MS = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+export const MAX_CALLS_PER_DAY = 1_000_000;
+
 function intEnv(value, fallback, min = 0) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
   const n = Number(value);
@@ -44,7 +46,9 @@ export function configFromEnv(env = process.env) {
     port: intEnv(env.PORT, 8080, 0),
     cacheTtlSeconds: intEnv(env.CACHE_TTL_SECONDS, 300),
     callsPerMinute: intEnv(env.MAX_API_CALLS_PER_MINUTE, 60, 1),
-    callsPerDay: intEnv(env.MAX_API_CALLS_PER_DAY, 2000, 1),
+    // Clamped: the cap keeps one timestamp per allowed call (8 bytes each).
+    callsPerDay: Math.min(MAX_CALLS_PER_DAY, intEnv(env.MAX_API_CALLS_PER_DAY, 2000, 1)),
+    allowPublic,
     cacheBytes: intEnv(env.CACHE_MAX_MB, 64, 1) * 1024 * 1024,
     feedToken,
     publicUrl: (env.PUBLIC_URL || "").replace(/\/+$/, "") || null,
@@ -222,7 +226,7 @@ export function createServer(cfg, { fetchImpl = globalThis.fetch, now = Date.now
       if (up.error) {
         // A missing subreddit or user is the reader's 404; a spent budget is a 429; anything else is ours (502).
         const f = FAILURES[up.reason] || FAILURES.upstream;
-        return send(res, f.status, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": f.status === 429 ? "60" : "300" }, `${f.text}\n`);
+        return send(res, f.status, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": up.reason === "day_budget" ? "3600" : f.status === 429 ? "60" : "300" }, `${f.text}\n`);
       }
 
       const format = formatOf(url.pathname);

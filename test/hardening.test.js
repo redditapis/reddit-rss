@@ -83,6 +83,7 @@ test("spend: MAX_API_CALLS_PER_DAY defaults to 2000 and caps calls over any 24 h
     assert.deepEqual([await get("a"), await get("b"), await get("c")], [200, 200, 200]);
     const over = await fetch(`${s.base}/search.rss?q=d`);
     assert.equal(over.status, 429);
+    assert.equal(over.headers.get("retry-after"), "3600", "a spent day budget does not clear in a minute");
     assert.match(await over.text(), /budget for the day/);
     t += 61_000; // a new minute does not reset the day
     assert.equal(await get("d"), 429);
@@ -96,6 +97,25 @@ test("spend: MAX_API_CALLS_PER_DAY defaults to 2000 and caps calls over any 24 h
   }
   assert.equal(configFromEnv({ REDDITAPIS_API_KEY: "k" }).callsPerDay, 2000);
   assert.equal(configFromEnv({ REDDITAPIS_API_KEY: "k", MAX_API_CALLS_PER_DAY: "50" }).callsPerDay, 50);
+  // One timestamp per allowed call is kept, so a huge value is clamped rather than allocated.
+  assert.equal(configFromEnv({ REDDITAPIS_API_KEY: "k", MAX_API_CALLS_PER_DAY: "100000000" }).callsPerDay, 1_000_000);
+});
+
+test("spend: an ALLOW_PUBLIC instance with no FEED_TOKEN says so at start", async () => {
+  const port = await freePort();
+  const env = { PATH: process.env.PATH, REDDITAPIS_API_KEY: "k_test", REDDITAPIS_API_BASE: "http://127.0.0.1:9", HOST: "127.0.0.1", ALLOW_PUBLIC: "1", PORT: String(port) };
+  const child = spawn(process.execPath, [INDEX], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  child.stdout.on("data", (c) => (out += c));
+  child.stderr.on("data", (c) => (out += c));
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 3000);
+    child.stdout.on("data", () => { if (/No FEED_TOKEN/.test(out)) { clearTimeout(timer); resolve(); } });
+  });
+  child.kill();
+  assert.match(out, /listening on/);
+  assert.match(out, /No FEED_TOKEN is set/);
+  assert.doesNotMatch(out, /k_test/);
 });
 
 // ---- memory ----

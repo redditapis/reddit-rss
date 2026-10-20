@@ -51,7 +51,7 @@ Swap `.rss` for `.atom` or `.json` to get Atom or JSON Feed. `?limit=` sets the 
 | `HOST_PORT` | `8080` | Docker Compose only: the port on this machine the container is published on. |
 | `CACHE_TTL_SECONDS` | `300` | How long a feed is reused before it is fetched again. |
 | `MAX_API_CALLS_PER_MINUTE` | `60` | Hard cap on API calls this instance makes in a minute, whatever readers request. Past it, readers get the last good copy or a 429. |
-| `MAX_API_CALLS_PER_DAY` | `2000` | Hard cap on API calls in any 24 hours. Past it, readers get the last good copy or a 429 until the oldest of those calls is a day old. |
+| `MAX_API_CALLS_PER_DAY` | `2000` | Hard cap on API calls in any 24 hours since the instance started (at most 1000000). Past it, readers get the last good copy or a 429 until the oldest of those calls is a day old. |
 | `CACHE_MAX_MB` | `64` | Memory the feed cache may use, counted in bytes of the API responses it keeps. |
 | `FEED_TOKEN` | (none) | When set, every feed URL needs `?token=<value>`, so a public instance cannot spend your balance. Feeds are then sent as `Cache-Control: private`, so shared caches do not keep them. |
 | `PUBLIC_URL` | request host | The address readers use, for the feed's self link (e.g. `https://rss.example.com`). Set it on any public instance. |
@@ -70,7 +70,7 @@ Copy `.env.example` to `.env` and `docker compose up -d` does the same as the on
 
 ## FAQ
 
-**Why do I need an API key?** Reddit's feeds are going away; the key is what keeps your feeds working after November 13. You pay only for the refreshes your reader makes; with the default five-minute cache, a busy feed costs at most one API call per five minutes no matter how many readers follow it. A feed whose refresh fails is retried once a minute. The whole instance makes at most `MAX_API_CALLS_PER_DAY` calls (2000 by default) in any 24 hours.
+**Why do I need an API key?** Reddit's feeds are going away; the key is what keeps your feeds working after November 13. You pay only for the refreshes your reader makes; with the default five-minute cache, a busy feed costs at most one API call per five minutes no matter how many readers follow it. A feed whose refresh fails is retried once a minute. The whole instance makes at most `MAX_API_CALLS_PER_DAY` calls (2000 by default) in any 24 hours since it started.
 
 **Why does it refuse to start?** `HOST` is an address other machines can reach and `FEED_TOKEN` is not set, so anyone who found the instance could spend your balance. Set `FEED_TOKEN`, or set `ALLOW_PUBLIC=1` if a firewall or a proxy already keeps it private.
 
