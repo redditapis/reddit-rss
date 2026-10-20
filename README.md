@@ -1,24 +1,31 @@
 # reddit-rss
 
-Reddit RSS feeds, back after November 13, self-hosted in one Docker command.
+Reddit RSS feeds that keep working after November 13, self-hosted in one Docker command.
 
-Reddit is switching off its `.rss` feeds on November 13, 2026, and [says there is no replacement](https://www.reddit.com/r/modnews/comments/1wubgvt/continuing_our_infrastructure_updates_whats/) for feeds outside the communities you moderate. reddit-rss gives you the same feed URLs on your own server: change the host in your reader and your subreddit, search, user and comment-thread subscriptions keep working. It serves RSS 2.0, Atom 1.0 and JSON Feed 1.1 for subreddits, searches, users and comment threads, caches each feed so your reader can poll as often as it likes, and answers `If-None-Match` with a 304 so nothing is fetched twice. It runs on the [RedditAPIs](https://www.redditapis.com/?ref=gh-reddit-rss) API with your own key, has no dependencies beyond Node 20, and works with Miniflux, FreshRSS, NetNewsWire, Thunderbird and any other reader (hosted readers such as Feedly or Inoreader need the instance on a public URL).
+Reddit is switching off its `.rss` feeds on November 13, 2026, and [its announcement](https://www.reddit.com/r/modnews/comments/1wubgvt/continuing_our_infrastructure_updates_whats/) says: "If you use RSS for feeds outside of a community you moderate, there is no replacement." reddit-rss gives you the same feed URLs on your own server: change the host in your reader and your subreddit, search, user and comment-thread subscriptions keep working. It serves RSS 2.0, Atom 1.0 and JSON Feed 1.1 for subreddits, searches, users and comment threads, caches each feed so your reader can poll as often as it likes, and answers `If-None-Match` with a 304 so nothing is fetched twice. It runs on the [RedditAPIs](https://www.redditapis.com/?ref=gh-reddit-rss) API with your own key, has no dependencies beyond Node 20, and works with Miniflux, FreshRSS, NetNewsWire, Thunderbird and any other reader (hosted readers such as Feedly or Inoreader need the instance on a public URL).
+
+Not affiliated with or endorsed by Reddit.
 
 ## Quick start
 
-1. Get an API key at [redditapis.com](https://www.redditapis.com/?ref=gh-reddit-rss). New accounts start with free credit, and each feed refresh is one API call.
+1. Get an API key at [redditapis.com](https://www.redditapis.com/?ref=gh-reddit-rss). New accounts start with free credit, and each feed refresh is one API call at $0.002, so the default cap of 2,000 calls a day (`MAX_API_CALLS_PER_DAY`) costs at most $4 a day.
 2. Run it:
 
 ```sh
-docker run -d -p 127.0.0.1:8080:8080 -e REDDITAPIS_API_KEY=your_key --name reddit-rss \
-  $(docker build -q https://github.com/redditapis/reddit-rss.git)
+docker run -d -p 127.0.0.1:8080:8080 -e REDDITAPIS_API_KEY=your_key --name reddit-rss ghcr.io/redditapis/reddit-rss:1.0.0
 ```
 
 Or with Node 20+:
 
 ```sh
-git clone https://github.com/redditapis/reddit-rss.git && cd reddit-rss
-REDDITAPIS_API_KEY=your_key npm start
+git clone https://github.com/redditapis/reddit-rss.git && cd reddit-rss && npm install && REDDITAPIS_API_KEY=your_key npm start
+```
+
+Build it yourself:
+
+```sh
+docker run -d -p 127.0.0.1:8080:8080 -e REDDITAPIS_API_KEY=your_key --name reddit-rss \
+  $(docker build -q https://github.com/redditapis/reddit-rss.git)
 ```
 
 3. In your reader, replace `https://www.reddit.com` (or `https://old.reddit.com`) with `http://localhost:8080` in any feed URL.
