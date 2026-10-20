@@ -30,7 +30,7 @@ docker run -d -p 127.0.0.1:8080:8080 -e REDDITAPIS_API_KEY=your_key --name reddi
 
 3. In your reader, replace `https://www.reddit.com` (or `https://old.reddit.com`) with `http://localhost:8080` in any feed URL.
 
-Both quick starts listen on this machine only. Inside the container the server listens on `0.0.0.0`, so the image sets `ALLOW_PUBLIC=1`; publishing the port on `127.0.0.1` (as above, and in Docker Compose) is what keeps it private. To serve readers elsewhere, publish the port more widely and set `FEED_TOKEN` (see [Configuration](#configuration)). Outside Docker, the server refuses to start on an address other machines can reach unless `FEED_TOKEN` is set.
+Every command above listens on this machine only. Inside the container the server listens on `0.0.0.0`, so the image sets `ALLOW_PUBLIC=1`; publishing the port on `127.0.0.1` (as above, and in Docker Compose) is what keeps it private. To serve readers elsewhere, publish the port more widely and set `FEED_TOKEN` (see [Configuration](#configuration)). Outside Docker, the server refuses to start on an address other machines can reach unless `FEED_TOKEN` is set.
 
 ## Feeds
 
@@ -64,7 +64,7 @@ Swap `.rss` for `.atom` or `.json` to get Atom or JSON Feed. `?limit=` sets the 
 | `PUBLIC_URL` | request host | The address readers use, for the feed's self link (e.g. `https://rss.example.com`). Set it on any public instance. |
 | `REDDITAPIS_API_BASE` | `https://api.redditapis.com` | Only needed for testing against another endpoint. |
 
-Copy `.env.example` to `.env` and `docker compose up -d` does the same as the one-liner above.
+Copy `.env.example` to `.env` and `docker compose up -d` builds and runs the same server from source, like the "Build it yourself" command above.
 
 ## How it handles failures
 
